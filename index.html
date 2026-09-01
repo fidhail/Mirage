@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="sk">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Waveset collection engine</title>
+<title>Waveset Collection Engine</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@700;900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -160,8 +160,8 @@
 
 <div class="wrap">
   <header>
-    <h1>Waveset <em>collection engine</em></h1>
-    <div class="stamp">Zero-crossing slicer / 32 kolekcií / 10 s pamäť</div>
+    <h1>Waveset <em>Collection Engine</em></h1>
+    <div class="stamp">Zero-crossing slicer / 32 collections / 10 s buffer</div>
   </header>
 
   <div class="grid">
@@ -170,37 +170,37 @@
       <div class="stage">
         <div class="canvas-box"><canvas id="cv"></canvas></div>
         <div class="bar">
-          <button id="tone" class="primary">Tón</button>
-          <button id="mic">Mikrofón</button>
-          <button id="pick">Súbor</button>
+          <button id="tone" class="primary">Tone</button>
+          <button id="mic">Mic</button>
+          <button id="pick">File</button>
           <input type="file" id="file" accept="audio/*,.wav,.mp3,.flac,.m4a,.aif,.aiff,.ogg,.opus">
           <div class="meter"><i id="mtr"></i></div>
-          <button id="stop">Ticho</button>
+          <button id="stop">Stop</button>
         </div>
         <div class="legend">
-          <span><i style="background:var(--red)"></i><b>zápis</b></span>
-          <span><i style="background:var(--blue)"></i><b>čítanie</b></span>
-          <span><i style="background:var(--wall)"></i><b>hranica kolekcie</b></span>
+          <span><i style="background:var(--red)"></i><b>write head</b></span>
+          <span><i style="background:var(--blue)"></i><b>read window</b></span>
+          <span><i style="background:var(--wall)"></i><b>collection boundary</b></span>
           <span class="tip" id="stats">—</span>
         </div>
       </div>
 
-      <div class="status" id="status" role="status" aria-live="polite">Vyber zdroj zvuku.</div>
+      <div class="status" id="status" role="status" aria-live="polite">Select an input source.</div>
 
       <div class="mod">
-        <h2><b>05</b> Východiská<span></span></h2>
+        <h2><b>05</b> Presets<span></span></h2>
         <div class="presets" id="presets"></div>
       </div>
 
       <details class="about">
-        <summary>O efekte</summary>
-        <p>Nahráva vstup do kruhového bufferu a krája ho v miestach prechodu nulou.
-        Skupina wavesetov tvorí kolekciu; tie sa prehrávajú späť preskladané, s výpadkami
-        a opakovaniami. Časovanie neurčuje tempo, ale samotný materiál, takže rovnaké
-        nastavenie znie na inom zdroji inak.</p>
-        <p>Ak zostane ticho, spusti stránku cez lokálny server:
-        <code>python3 -m http.server</code>. Audio worklet sa zo súborového systému
-        väčšinou nenačíta.</p>
+        <summary>About</summary>
+        <p>Records the input into a circular buffer and slices it at zero crossings.
+        A group of wavesets forms a collection; collections are played back reordered,
+        with dropouts and repeats. Timing is driven by the source material rather than by
+        tempo, so identical settings sound different on different material.</p>
+        <p>If you get no sound, serve the page over a local server:
+        <code>python3 -m http.server</code>. Audio worklets usually refuse to load
+        straight from the file system.</p>
       </details>
     </section>
 
@@ -234,7 +234,7 @@ class FauveProcessor extends AudioWorkletProcessor {
 
     this.p = { length:10, floor:0, stuck:0, disorder:0, repeat:0, freeze:0,
                rate:1, absence:0.5, envelope:1, mirage:0.6, lean:0, smoo:20,
-               sync:0, srcVol:1, procVol:1, sustain:1 };
+               sync:0, dryGain:1, wetGain:1, sustain:1 };
 
     // downsampled trace for the display: 400 points per second, 4 seconds
     this.VPS = 400;
@@ -367,8 +367,8 @@ class FauveProcessor extends AudioWorkletProcessor {
       if (dR > 0) this.gR = Math.min(this.tR, this.gR + smooStep);
       else if (dR < 0) this.gR = Math.max(this.tR, this.gR - smooStep);
 
-      outL[i] = l * (1 - this.gL) * p.srcVol + pl * this.gL * p.procVol * this.sGate;
-      outR[i] = r * (1 - this.gR) * p.srcVol + pr * this.gR * p.procVol * this.sGate;
+      outL[i] = l * (1 - this.gL) * p.dryGain + pl * this.gL * p.wetGain * this.sGate;
+      outR[i] = r * (1 - this.gR) * p.dryGain + pr * this.gR * p.wetGain * this.sGate;
 
       this.total++;
     }
@@ -405,7 +405,7 @@ registerProcessor('fauve', FauveProcessor);
   var P = {
     length:10, floor:0, stuck:0, disorder:0, repeat:0, freeze:0,
     rate:1, absence:0.5, envelope:1, mirage:0.6, lean:0, smoo:20,
-    sync:0, srcVol:1, procVol:1, sustain:1
+    sync:0, dryGain:1, wetGain:1, sustain:1
   };
 
   var ctx = null, node = null, srcNode = null, micStream = null, toneNodes = null;
@@ -419,31 +419,31 @@ registerProcessor('fauve', FauveProcessor);
 
   // ---------------------------------------------------------------- rack
   var MODULES = [
-    { t:'Zber', col:'a', items:[
-      { k:'length',  n:'Dĺžka',        min:1, max:64, step:1,   u:'ws',  dec:0 },
-      { k:'floor',   n:'Minimum',      opts:['0 ms','25 ms','50 ms','100 ms'], vals:[0,25,50,100] },
-      { k:'stuck',   n:'Zaseknutie',   min:0, max:100, step:1,  u:'%',   dec:0, sc:100 }
-    ], hint:'Kolekcia sa uzavrie až keď je splnený počet wavesetov aj minimálny čas.' },
+    { t:'Capture', col:'a', items:[
+      { k:'length',  n:'Length',       min:1, max:64, step:1,   u:'ws',  dec:0 },
+      { k:'floor',   n:'Floor',        opts:['0 ms','25 ms','50 ms','100 ms'], vals:[0,25,50,100] },
+      { k:'stuck',   n:'Stuck',        min:0, max:100, step:1,  u:'%',   dec:0, sc:100 }
+    ], hint:'A collection closes only once both the waveset count and the floor time are met.' },
 
-    { t:'Prehrávanie', col:'a', items:[
-      { k:'disorder', n:'Neporiadok',  min:0, max:100, step:1,  u:'%',   dec:0, sc:100 },
-      { k:'repeat',   n:'Opakovanie',  min:0, max:100, step:1,  u:'%',   dec:0, sc:100 },
-      { k:'rate',     n:'Rýchlosť',    min:0.5, max:2, step:0.01, u:'×', dec:2 },
-      { k:'absence',  n:'Neprítomnosť',min:0, max:100, step:1,  u:'%',   dec:0, sc:100 }
-    ], toggles:[['freeze','Zmraziť'],['envelope','Obálka']],
-       hint:'Neprítomnosť: pod 50 náhodná hlasitosť, nad 50 výpadky do ticha.' },
+    { t:'Playback', col:'a', items:[
+      { k:'disorder', n:'Disorder',    min:0, max:100, step:1,  u:'%',   dec:0, sc:100 },
+      { k:'repeat',   n:'Repeat',      min:0, max:100, step:1,  u:'%',   dec:0, sc:100 },
+      { k:'rate',     n:'Rate',        min:0.5, max:2, step:0.01, u:'×', dec:2 },
+      { k:'absence',  n:'Absence',     min:0, max:100, step:1,  u:'%',   dec:0, sc:100 }
+    ], toggles:[['freeze','Freeze'],['envelope','Envelope']],
+       hint:'Absence below 50 randomises gain per collection, above 50 drops it to silence.' },
 
-    { t:'Prelud', col:'b', items:[
-      { k:'mirage', n:'Prelud',     min:0, max:100, step:1, u:'%',  dec:0, sc:100 },
-      { k:'lean',   n:'Náklon',     min:-100, max:100, step:1, u:'', dec:0, sc:100 },
-      { k:'smoo',   n:'Zjemnenie',  min:0, max:200, step:1, u:'ms', dec:0 }
-    ], toggles:[['sync','Kanály spolu']],
-       hint:'Pri každej kolekcii sa rozhodne, či zaznie zdroj alebo spracovanie.' },
+    { t:'Mirage', col:'b', items:[
+      { k:'mirage', n:'Mirage',     min:0, max:100, step:1, u:'%',  dec:0, sc:100 },
+      { k:'lean',   n:'Lean',       min:-100, max:100, step:1, u:'', dec:0, sc:100 },
+      { k:'smoo',   n:'Smooth',     min:0, max:200, step:1, u:'ms', dec:0 }
+    ], toggles:[['sync','Mono sync']],
+       hint:'At every new collection Mirage decides whether the dry or the wet path is heard.' },
 
-    { t:'Výstup', col:'b', items:[
-      { k:'srcVol',  n:'Zdroj',       min:0, max:100, step:1, u:'%', dec:0, sc:100 },
-      { k:'procVol', n:'Spracovanie', min:0, max:100, step:1, u:'%', dec:0, sc:100 }
-    ], toggles:[['sustain','Hrať v tichu']] }
+    { t:'Output', col:'b', items:[
+      { k:'dryGain',  n:'Dry',         min:0, max:100, step:1, u:'%', dec:0, sc:100 },
+      { k:'wetGain', n:'Wet',         min:0, max:100, step:1, u:'%', dec:0, sc:100 }
+    ], toggles:[['sustain','Sustain']] }
   ];
 
   var refs = {};
@@ -564,15 +564,15 @@ registerProcessor('fauve', FauveProcessor);
 
   // ---------------------------------------------------------- presets
   var PRESETS = [
-    ['Mihotanie', {length:24,floor:50,stuck:0,disorder:0.15,repeat:0.1,rate:1,
+    ['Shimmer', {length:24,floor:50,stuck:0,disorder:0.15,repeat:0.1,rate:1,
       absence:0.5,envelope:1,mirage:0.45,lean:0.3,smoo:60,sync:0,freeze:0}],
-    ['Koktanie', {length:6,floor:0,stuck:0.1,disorder:0.5,repeat:0.6,rate:1,
+    ['Stutter', {length:6,floor:0,stuck:0.1,disorder:0.5,repeat:0.6,rate:1,
       absence:0.72,envelope:1,mirage:0.9,lean:0,smoo:4,sync:0,freeze:0}],
-    ['Zamrznutý dron', {length:40,floor:100,stuck:0.8,disorder:0,repeat:1,rate:0.75,
+    ['Frozen drone', {length:40,floor:100,stuck:0.8,disorder:0,repeat:1,rate:0.75,
       absence:0.5,envelope:1,mirage:1,lean:0,smoo:120,sync:1,freeze:1}],
-    ['Rozpad', {length:2,floor:0,stuck:0.35,disorder:0.85,repeat:0.2,rate:1.5,
+    ['Disintegrate', {length:2,floor:0,stuck:0.35,disorder:0.85,repeat:0.2,rate:1.5,
       absence:0.85,envelope:0,mirage:1,lean:0,smoo:0,sync:0,freeze:0}],
-    ['Duchovia', {length:14,floor:25,stuck:0.55,disorder:0.35,repeat:0,rate:1,
+    ['Ghost notes', {length:14,floor:25,stuck:0.55,disorder:0.35,repeat:0,rate:1,
       absence:0.35,envelope:1,mirage:0.3,lean:-0.4,smoo:30,sync:0,freeze:0}]
   ];
   PRESETS.forEach(function(pr){
@@ -597,7 +597,7 @@ registerProcessor('fauve', FauveProcessor);
       node.connect(ctx.destination);
       live();
     }).catch(function(err){
-      say('Audio worklet sa nenačítal. Spusti stránku cez lokálny server.', 'err');
+      say('Audio worklet failed to load. Serve the page over a local server.', 'err');
       throw err;
     });
   }
@@ -613,7 +613,7 @@ registerProcessor('fauve', FauveProcessor);
     ['tone','mic','pick'].forEach(function(x){ $(x).classList.toggle('on', x === id); });
   }
 
-  $('stop').addEventListener('click', function(){ clearSource(); say('Ticho.'); });
+  $('stop').addEventListener('click', function(){ clearSource(); say('Stopped.'); });
 
   $('tone').addEventListener('click', function(){
     ensureCtx().then(function(){
@@ -634,7 +634,7 @@ registerProcessor('fauve', FauveProcessor);
       var lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600;
       mix.connect(lp); lp.connect(node);
       toneNodes = made; srcNode = mix;
-      mark('tone'); say('Testovací tón hrá.', 'ok');
+      mark('tone'); say('Test tone running.', 'ok');
     }).catch(function(){});
   });
 
@@ -649,8 +649,8 @@ registerProcessor('fauve', FauveProcessor);
       micStream = stream;
       srcNode = ctx.createMediaStreamSource(stream);
       srcNode.connect(node);
-      mark('mic'); say('Mikrofón beží. Nasaď si slúchadlá.', 'ok');
-    }).catch(function(){ say('Mikrofón sa nepodarilo otvoriť.', 'err'); });
+      mark('mic'); say('Mic input live. Use headphones.', 'ok');
+    }).catch(function(){ say('Could not open the microphone.', 'err'); });
   });
 
   $('pick').addEventListener('click', function(){ $('file').click(); });
@@ -658,7 +658,7 @@ registerProcessor('fauve', FauveProcessor);
   $('file').addEventListener('change', function(e){
     var f = e.target.files && e.target.files[0];
     if (!f) return;
-    say('Načítavam ' + f.name);
+    say('Decoding ' + f.name);
     ensureCtx().then(function(){ return f.arrayBuffer(); })
       .then(function(ab){ return ctx.decodeAudioData(ab); })
       .then(function(buf){
@@ -667,8 +667,8 @@ registerProcessor('fauve', FauveProcessor);
         var s = ctx.createBufferSource();
         s.buffer = buf; s.loop = true; s.connect(node); s.start();
         srcNode = s;
-        mark('pick'); say(f.name + ' hrá v slučke.', 'ok');
-      }).catch(function(){ say('Súbor sa nepodarilo dekódovať.', 'err'); });
+        mark('pick'); say(f.name + ' looping.', 'ok');
+      }).catch(function(){ say('Could not decode that file.', 'err'); });
   });
 
   // ------------------------------------------------------------ display
@@ -741,7 +741,7 @@ registerProcessor('fauve', FauveProcessor);
     }
 
     mtrEl.style.width = Math.min(100, (d.level||0)*260).toFixed(1) + '%';
-    $('stats').textContent = d.ncol + ' kolekcií / ' +
+    $('stats').textContent = d.ncol + ' collections / ' +
       (d.curMs ? d.curMs.toFixed(0) : '0') + ' ms';
   }
 
