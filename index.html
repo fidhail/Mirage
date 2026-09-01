@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waveset collection engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@700;900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#080B12;
+    --panel:#101622;
+    --panel-2:#0C1119;
+    --line:#1D2635;
+    --line-soft:#161E2A;
+    --text:#DDE4EF;
+    --muted:#79879C;
+    --dim:#77879E;
+    --blue:#5C9DFF;
+    --red:#FF6A46;
+    --wall:#33445C;
+    --open:#5BD6A6;
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--ground);color:var(--text);
+    font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+    font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:none;margin:0;padding:10px 14px 12px;height:100%;
+    display:flex;flex-direction:column;gap:9px}
+
+  header{display:flex;align-items:baseline;justify-content:space-between;gap:20px;
+    padding-bottom:8px;border-bottom:1px solid var(--line);flex:0 0 auto}
+  h1{font-family:Chivo,"IBM Plex Sans",sans-serif;font-weight:900;
+    font-size:clamp(17px,1.6vw,24px);line-height:1;letter-spacing:-.025em;margin:0}
+  h1 em{font-style:normal;color:var(--blue)}
+  .stamp{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--dim);white-space:nowrap}
+
+  .grid{display:grid;
+    grid-template-columns:minmax(340px,1.25fr) minmax(430px,1fr);
+    gap:11px;flex:1 1 auto;min-height:0}
+  .mid,.rack{min-height:0;overflow:auto;overscroll-behavior:contain}
+  .mid{display:flex;flex-direction:column;gap:10px}
+  .mid .stage{flex:1 1 auto}
+  .rack{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:start}
+  .rcol{display:flex;flex-direction:column;gap:8px;min-width:0}
+  .rack .mod{min-width:0}
+  @media (max-width:1320px){
+    .grid{grid-template-columns:minmax(0,1fr) minmax(380px,1fr)}
+  }
+  @media (max-width:1060px){
+    .rack{grid-template-columns:1fr}
+  }
+  @media (max-width:1000px){
+    .wrap{height:auto}
+    .grid{grid-template-columns:minmax(0,1fr)}
+    .mid,.rack{overflow:visible}
+    .canvas-box{height:52vh}
+  }
+
+  .stage{background:var(--panel-2);border:1px solid var(--line);border-radius:3px;overflow:hidden;
+    display:flex;flex-direction:column;min-height:0}
+  .canvas-box{flex:1 1 auto;min-height:180px;position:relative;
+    background:radial-gradient(circle at 50% 50%, #0E1522 0%, #080B12 72%)}
+  .stage canvas{position:absolute;inset:0;display:block;width:100%;height:100%}
+
+  .bar{display:flex;flex-wrap:wrap;gap:7px;align-items:center;flex:0 0 auto;
+    padding:9px 10px;border-top:1px solid var(--line);background:var(--panel)}
+  .meter{flex:1 1 100px;min-width:80px;height:6px;background:var(--line-soft);border-radius:2px;overflow:hidden}
+  .meter i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--blue),var(--red));
+    transition:width .06s linear}
+
+  button{font-family:"IBM Plex Mono",monospace;font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--text);background:transparent;border:1px solid var(--line);
+    padding:8px 13px;border-radius:2px;cursor:pointer;transition:border-color .15s,color .15s,background .15s}
+  button:hover:not(:disabled){border-color:var(--blue);color:#fff}
+  button:disabled{opacity:.35;cursor:not-allowed}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#04121F;font-weight:500}
+  button.primary:hover{background:#7BB2FF;border-color:#7BB2FF;color:#04121F}
+  button.on{border-color:var(--blue);color:var(--blue)}
+  :focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+  input[type=file]{display:none}
+
+  .legend{display:flex;gap:13px;flex-wrap:wrap;padding:7px 10px;border-top:1px solid var(--line);
+    background:var(--panel);font-family:"IBM Plex Mono",monospace;font-size:10px;flex:0 0 auto;
+    letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
+  .legend .tip{margin-left:auto;color:var(--blue);font-variant-numeric:tabular-nums}
+  .legend i{display:inline-block;width:16px;height:2px;vertical-align:middle;margin-right:6px}
+
+  .mod{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:9px 11px 10px}
+  .mod > h2{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.17em;text-transform:uppercase;
+    color:var(--dim);margin:0 0 7px;display:flex;align-items:baseline;gap:8px}
+  .mod > h2 b{color:var(--blue);font-weight:500}
+  .mod > h2 span{flex:1;height:1px;background:var(--line-soft);transform:translateY(-3px)}
+
+  .ctl{margin-top:7px}
+  .ctl:first-of-type{margin-top:0}
+  .ctl .top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px}
+  .ctl .nm{font-size:12.5px;color:var(--text)}
+  .num-wrap{display:flex;align-items:baseline;gap:4px;flex:0 0 auto}
+  input[type=number]{width:60px;text-align:right;font-family:"IBM Plex Mono",monospace;font-size:12px;
+    color:var(--blue);background:var(--panel-2);border:1px solid var(--line);border-radius:2px;
+    padding:2px 5px;font-variant-numeric:tabular-nums;-moz-appearance:textfield}
+  input[type=number]:focus{border-color:var(--blue);outline:none}
+  input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{
+    -webkit-appearance:none;margin:0}
+  .unit{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--dim);width:26px}
+  select{width:100%;font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--blue);
+    background:var(--panel-2);border:1px solid var(--line);border-radius:2px;padding:2px 6px;cursor:pointer}
+  select:focus{border-color:var(--blue);outline:none}
+  .hint{font-family:"IBM Plex Mono",monospace;font-size:10px;line-height:1.45;color:var(--dim);
+    margin-top:3px;font-variant-numeric:tabular-nums}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:15px;background:transparent;cursor:pointer;margin:0}
+  input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--line);border-radius:2px}
+  input[type=range]::-moz-range-track{height:2px;background:var(--line);border-radius:2px}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+    background:var(--text);border:none;margin-top:-5px;transition:background .15s,box-shadow .15s}
+  input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:var(--text);border:none}
+  input[type=range]:hover::-webkit-slider-thumb{background:var(--blue);box-shadow:0 0 0 5px rgba(92,157,255,.14)}
+  input[type=range]:hover::-moz-range-thumb{background:var(--blue)}
+
+  .toggles{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+  .toggles button{padding:6px 4px;font-size:10px;letter-spacing:.07em;width:100%}
+
+  .presets{display:flex;flex-wrap:wrap;gap:6px}
+  .presets button{padding:6px 10px;font-size:10px;letter-spacing:.07em}
+
+  .status{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);
+    padding:8px 10px;background:var(--panel);border:1px solid var(--line);border-radius:3px;
+    min-height:1.5em;word-break:break-word;flex:0 0 auto}
+  .status.err{color:var(--red)}
+  .status.ok{color:var(--open)}
+
+  .about{margin-top:auto;font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);
+    border-radius:3px;padding:8px 10px;flex:0 0 auto}
+  .about summary{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.17em;
+    text-transform:uppercase;color:var(--dim);cursor:pointer}
+  .about p{margin:9px 0 0;line-height:1.55}
+  .about code{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--text)}
+
+  @media (max-height:900px){
+    .ctl{margin-top:4px}
+    .ctl .top{margin-bottom:2px}
+    .mod{padding:6px 10px 7px}
+    .mod > h2{margin:0 0 4px}
+    .hint{font-size:9.5px;line-height:1.25;margin-top:2px}
+    input[type=range]{height:13px}
+    .rack{gap:6px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <h1>Waveset <em>collection engine</em></h1>
+    <div class="stamp">Zero-crossing slicer / 32 kolekcií / 10 s pamäť</div>
+  </header>
+
+  <div class="grid">
+
+    <section class="mid">
+      <div class="stage">
+        <div class="canvas-box"><canvas id="cv"></canvas></div>
+        <div class="bar">
+          <button id="tone" class="primary">Tón</button>
+          <button id="mic">Mikrofón</button>
+          <button id="pick">Súbor</button>
+          <input type="file" id="file" accept="audio/*,.wav,.mp3,.flac,.m4a,.aif,.aiff,.ogg,.opus">
+          <div class="meter"><i id="mtr"></i></div>
+          <button id="stop">Ticho</button>
+        </div>
+        <div class="legend">
+          <span><i style="background:var(--red)"></i><b>zápis</b></span>
+          <span><i style="background:var(--blue)"></i><b>čítanie</b></span>
+          <span><i style="background:var(--wall)"></i><b>hranica kolekcie</b></span>
+          <span class="tip" id="stats">—</span>
+        </div>
+      </div>
+
+      <div class="status" id="status" role="status" aria-live="polite">Vyber zdroj zvuku.</div>
+
+      <div class="mod">
+        <h2><b>05</b> Východiská<span></span></h2>
+        <div class="presets" id="presets"></div>
+      </div>
+
+      <details class="about">
+        <summary>O efekte</summary>
+        <p>Nahráva vstup do kruhového bufferu a krája ho v miestach prechodu nulou.
+        Skupina wavesetov tvorí kolekciu; tie sa prehrávajú späť preskladané, s výpadkami
+        a opakovaniami. Časovanie neurčuje tempo, ale samotný materiál, takže rovnaké
+        nastavenie znie na inom zdroji inak.</p>
+        <p>Ak zostane ticho, spusti stránku cez lokálny server:
+        <code>python3 -m http.server</code>. Audio worklet sa zo súborového systému
+        väčšinou nenačíta.</p>
+      </details>
+    </section>
+
+    <div class="rack"><div class="rcol" id="rack-a"></div><div class="rcol" id="rack-b"></div></div>
+  </div>
+</div>
+
+<script type="text/worklet" id="workletSrc">
+class FauveProcessor extends AudioWorkletProcessor {
+  constructor(){
+    super();
+    this.sr = sampleRate;
+    this.bufLen = Math.floor(10 * this.sr);
+    this.bufL = new Float32Array(this.bufLen);
+    this.bufR = new Float32Array(this.bufLen);
+    this.total = 0;
+
+    this.HIST = 32;
+    this.colStart = new Float64Array(this.HIST);
+    this.colDur   = new Float64Array(this.HIST);
+    this.wp = 0; this.ncol = 0;
+
+    this.armed = false;
+    this.wsCount = 0; this.colSamples = 0;
+
+    this.cIdx = -1;
+    this.playLeft = 0; this.playLen = 1; this.playPos = 0; this.readCur = 0;
+    this.absAmp = 1;
+    this.gL = 0; this.gR = 0; this.tL = 0; this.tR = 0;
+    this.envF = 0; this.sGate = 1;
+
+    this.p = { length:10, floor:0, stuck:0, disorder:0, repeat:0, freeze:0,
+               rate:1, absence:0.5, envelope:1, mirage:0.6, lean:0, smoo:20,
+               sync:0, srcVol:1, procVol:1, sustain:1 };
+
+    // downsampled trace for the display: 400 points per second, 4 seconds
+    this.VPS = 400;
+    this.vLen = this.VPS * 4;
+    this.vBuf = new Float32Array(this.vLen);
+    this.vIdx = 0;
+    this.vHop = Math.max(1, Math.round(this.sr / this.VPS));
+    this.vAcc = 0; this.vCount = 0;
+    this.vMarks = new Float64Array(this.HIST);
+    this.postCounter = 0;
+
+    this.port.onmessage = (e) => {
+      if (e.data && e.data.type === 'params') Object.assign(this.p, e.data.value);
+    };
+  }
+
+  nextCollection(){
+    const p = this.p;
+    const reuse = (Math.random() < p.repeat) || p.freeze;
+    if (!reuse || this.cIdx < 0){
+      const k = (Math.random() < p.disorder) ? Math.floor(Math.random() * this.ncol) : 0;
+      this.cIdx = (((this.wp - 1 - k) % this.HIST) + this.HIST) % this.HIST;
+    }
+    const dur = this.colDur[this.cIdx];
+    if (dur < 1){ this.playLeft = 0; return; }
+    this.readCur = this.colStart[this.cIdx];
+    this.playLen = Math.max(1, Math.round(dur / p.rate));
+    this.playLeft = this.playLen;
+    this.playPos = 0;
+
+    const a = p.absence, rnd = Math.random();
+    this.absAmp = (a < 0.5) ? (1 - (1 - 2*a) * rnd)
+                            : ((rnd < (2*a - 1)) ? 0 : 1);
+
+    const r1 = Math.random(), r2 = p.sync ? r1 : Math.random();
+    this.tL = (r1 < p.mirage * (1 - p.lean)) ? 1 : 0;
+    this.tR = (r2 < p.mirage * (1 + p.lean)) ? 1 : 0;
+  }
+
+  process(inputs, outputs){
+    const input = inputs[0], output = outputs[0];
+    if (!output || !output.length) return true;
+    const outL = output[0];
+    const outR = output.length > 1 ? output[1] : output[0];
+    const n = outL.length;
+    const inL = (input && input.length) ? input[0] : null;
+    const inR = (input && input.length > 1) ? input[1] : inL;
+
+    const p = this.p;
+    const thr = 0.0002;
+    const floorSamples = p.floor * 0.001 * this.sr;
+    const smooStep = 1 / Math.max(1, p.smoo * 0.001 * this.sr);
+
+    for (let i = 0; i < n; i++){
+      const l = inL ? inL[i] : 0;
+      const r = inR ? inR[i] : 0;
+
+      const wi = this.total % this.bufLen;
+      this.bufL[wi] = l;
+      this.bufR[wi] = r;
+
+      const mono = (l + r) * 0.5;
+      const mag = mono < 0 ? -mono : mono;
+      this.envF += (mag - this.envF) * (mag > this.envF ? 0.02 : 0.0004);
+
+      // trace for the display: peak within each hop
+      if (mag > this.vAcc) this.vAcc = mag;
+      if (++this.vCount >= this.vHop){
+        this.vBuf[this.vIdx] = this.vAcc;
+        this.vIdx = (this.vIdx + 1) % this.vLen;
+        this.vAcc = 0; this.vCount = 0;
+      }
+
+      // upward zero crossing with hysteresis == one waveset
+      if (!this.armed){
+        if (mono < -thr) this.armed = true;
+      } else if (mono > thr){
+        this.armed = false;
+        this.wsCount++;
+      }
+      this.colSamples++;
+
+      if (p.length > 0 && this.wsCount >= p.length && this.colSamples >= floorSamples){
+        if (Math.random() >= p.stuck){
+          this.colStart[this.wp] = this.total - this.colSamples + 1;
+          this.colDur[this.wp]   = this.colSamples;
+          this.vMarks[this.wp]   = this.total;
+          this.wp = (this.wp + 1) % this.HIST;
+          if (this.ncol < this.HIST) this.ncol++;
+        }
+        this.wsCount = 0;
+        this.colSamples = 0;
+      }
+
+      if (this.playLeft <= 0 && this.ncol > 0) this.nextCollection();
+
+      let pl = 0, pr = 0;
+      if (this.playLeft > 0){
+        const age = this.total - this.readCur;
+        if (age > this.bufLen - 512 || age < 1){
+          this.playLeft = 0;
+        } else {
+          const idx  = Math.floor(this.readCur);
+          const frac = this.readCur - idx;
+          const i0 = ((idx % this.bufLen) + this.bufLen) % this.bufLen;
+          const i1 = (i0 + 1) % this.bufLen;
+          pl = this.bufL[i0] * (1 - frac) + this.bufL[i1] * frac;
+          pr = this.bufR[i0] * (1 - frac) + this.bufR[i1] * frac;
+
+          let e = 1;
+          if (p.envelope){
+            e = 0.5 - 0.5 * Math.cos(2 * Math.PI * (this.playPos / this.playLen));
+          }
+          const g = e * this.absAmp;
+          pl *= g; pr *= g;
+
+          this.readCur += p.rate;
+          this.playPos++;
+          this.playLeft--;
+        }
+      }
+
+      const wantGate = p.sustain ? 1 : (this.envF > 0.0009 ? 1 : 0);
+      this.sGate += (wantGate - this.sGate) * 0.0009;
+
+      const dL = this.tL - this.gL;
+      if (dL > 0) this.gL = Math.min(this.tL, this.gL + smooStep);
+      else if (dL < 0) this.gL = Math.max(this.tL, this.gL - smooStep);
+      const dR = this.tR - this.gR;
+      if (dR > 0) this.gR = Math.min(this.tR, this.gR + smooStep);
+      else if (dR < 0) this.gR = Math.max(this.tR, this.gR - smooStep);
+
+      outL[i] = l * (1 - this.gL) * p.srcVol + pl * this.gL * p.procVol * this.sGate;
+      outR[i] = r * (1 - this.gR) * p.srcVol + pr * this.gR * p.procVol * this.sGate;
+
+      this.total++;
+    }
+
+    if (++this.postCounter >= 12){
+      this.postCounter = 0;
+      const marks = [];
+      for (let j = 0; j < this.ncol; j++){
+        const age = (this.total - this.vMarks[j]) / this.sr;
+        if (age >= 0 && age < 4) marks.push(age);
+      }
+      this.port.postMessage({
+        trace: this.vBuf.slice(0),
+        head: this.vIdx,
+        marks: marks,
+        readAge: this.playLeft > 0 ? (this.total - this.readCur) / this.sr : -1,
+        spanSec: this.playLeft > 0 ? (this.playLen * this.p.rate) / this.sr : 0,
+        ncol: this.ncol,
+        level: this.envF,
+        curMs: this.playLen > 0 ? (this.playLen * this.p.rate * 1000 / this.sr) : 0
+      });
+    }
+    return true;
+  }
+}
+registerProcessor('fauve', FauveProcessor);
+</script>
+
+<script>
+(function(){
+  'use strict';
+  var $ = function(id){ return document.getElementById(id); };
+
+  var P = {
+    length:10, floor:0, stuck:0, disorder:0, repeat:0, freeze:0,
+    rate:1, absence:0.5, envelope:1, mirage:0.6, lean:0, smoo:20,
+    sync:0, srcVol:1, procVol:1, sustain:1
+  };
+
+  var ctx = null, node = null, srcNode = null, micStream = null, toneNodes = null;
+
+  function say(msg, cls){
+    var el = $('status');
+    el.textContent = msg;
+    el.className = 'status' + (cls ? ' ' + cls : '');
+  }
+  function live(){ if (node) node.port.postMessage({ type:'params', value:P }); }
+
+  // ---------------------------------------------------------------- rack
+  var MODULES = [
+    { t:'Zber', col:'a', items:[
+      { k:'length',  n:'Dĺžka',        min:1, max:64, step:1,   u:'ws',  dec:0 },
+      { k:'floor',   n:'Minimum',      opts:['0 ms','25 ms','50 ms','100 ms'], vals:[0,25,50,100] },
+      { k:'stuck',   n:'Zaseknutie',   min:0, max:100, step:1,  u:'%',   dec:0, sc:100 }
+    ], hint:'Kolekcia sa uzavrie až keď je splnený počet wavesetov aj minimálny čas.' },
+
+    { t:'Prehrávanie', col:'a', items:[
+      { k:'disorder', n:'Neporiadok',  min:0, max:100, step:1,  u:'%',   dec:0, sc:100 },
+      { k:'repeat',   n:'Opakovanie',  min:0, max:100, step:1,  u:'%',   dec:0, sc:100 },
+      { k:'rate',     n:'Rýchlosť',    min:0.5, max:2, step:0.01, u:'×', dec:2 },
+      { k:'absence',  n:'Neprítomnosť',min:0, max:100, step:1,  u:'%',   dec:0, sc:100 }
+    ], toggles:[['freeze','Zmraziť'],['envelope','Obálka']],
+       hint:'Neprítomnosť: pod 50 náhodná hlasitosť, nad 50 výpadky do ticha.' },
+
+    { t:'Prelud', col:'b', items:[
+      { k:'mirage', n:'Prelud',     min:0, max:100, step:1, u:'%',  dec:0, sc:100 },
+      { k:'lean',   n:'Náklon',     min:-100, max:100, step:1, u:'', dec:0, sc:100 },
+      { k:'smoo',   n:'Zjemnenie',  min:0, max:200, step:1, u:'ms', dec:0 }
+    ], toggles:[['sync','Kanály spolu']],
+       hint:'Pri každej kolekcii sa rozhodne, či zaznie zdroj alebo spracovanie.' },
+
+    { t:'Výstup', col:'b', items:[
+      { k:'srcVol',  n:'Zdroj',       min:0, max:100, step:1, u:'%', dec:0, sc:100 },
+      { k:'procVol', n:'Spracovanie', min:0, max:100, step:1, u:'%', dec:0, sc:100 }
+    ], toggles:[['sustain','Hrať v tichu']] }
+  ];
+
+  var refs = {};
+
+  function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+
+  MODULES.forEach(function(mod, mi){
+    var box = document.createElement('div');
+    box.className = 'mod';
+    box.innerHTML = '<h2><b>' + String(mi+1).padStart(2,'0') + '</b> ' + mod.t + '<span></span></h2>';
+
+    mod.items.forEach(function(it){
+      var wrap = document.createElement('div');
+      wrap.className = 'ctl';
+
+      if (it.opts){
+        wrap.innerHTML =
+          '<div class="top"><span class="nm">' + it.n + '</span></div>' +
+          '<select id="x-' + it.k + '">' +
+          it.opts.map(function(o,i){
+            return '<option value="' + i + '"' + (it.vals[i] === P[it.k] ? ' selected' : '') + '>' + o + '</option>';
+          }).join('') + '</select>';
+        box.appendChild(wrap);
+        wrap.querySelector('select').addEventListener('change', function(e){
+          P[it.k] = it.vals[+e.target.value];
+          live();
+        });
+        return;
+      }
+
+      var sc = it.sc || 1;
+      var raw = P[it.k] * sc;
+      wrap.innerHTML =
+        '<div class="top"><span class="nm">' + it.n + '</span>' +
+        '<span class="num-wrap"><input type="number" id="n-' + it.k + '" min="' + it.min +
+        '" max="' + it.max + '" step="' + it.step + '" value="' + raw.toFixed(it.dec) +
+        '"><span class="unit">' + it.u + '</span></span></div>' +
+        '<input type="range" id="s-' + it.k + '" min="' + it.min + '" max="' + it.max +
+        '" step="' + it.step + '" value="' + raw + '">';
+      box.appendChild(wrap);
+
+      var sl = wrap.querySelector('input[type=range]');
+      var nb = wrap.querySelector('input[type=number]');
+      refs[it.k] = { sl:sl, nb:nb, it:it };
+
+      var apply = function(v, fromNum){
+        v = clamp(v, it.min, it.max);
+        P[it.k] = v / sc;
+        if (!fromNum) nb.value = v.toFixed(it.dec);
+        sl.value = String(v);
+        live();
+      };
+      var settle = function(){
+        var v = parseFloat(nb.value);
+        apply(isFinite(v) ? v : it.min, false);
+      };
+      sl.addEventListener('input', function(){ apply(parseFloat(sl.value), false); });
+      nb.addEventListener('input', function(){
+        var v = parseFloat(nb.value); if (isFinite(v)) apply(v, true);
+      });
+      nb.addEventListener('change', settle);
+      nb.addEventListener('blur', settle);
+      nb.addEventListener('keydown', function(e){ if (e.key === 'Enter') settle(); });
+    });
+
+    if (mod.toggles){
+      var tg = document.createElement('div');
+      tg.className = 'toggles';
+      mod.toggles.forEach(function(t){
+        var b = document.createElement('button');
+        b.id = 't-' + t[0];
+        b.textContent = t[1];
+        b.setAttribute('aria-pressed', P[t[0]] ? 'true' : 'false');
+        b.classList.toggle('on', !!P[t[0]]);
+        b.addEventListener('click', function(){
+          P[t[0]] = P[t[0]] ? 0 : 1;
+          b.classList.toggle('on', !!P[t[0]]);
+          b.setAttribute('aria-pressed', P[t[0]] ? 'true' : 'false');
+          live();
+        });
+        tg.appendChild(b);
+      });
+      box.appendChild(tg);
+    }
+
+    if (mod.hint){
+      var h = document.createElement('div');
+      h.className = 'hint';
+      h.textContent = mod.hint;
+      box.appendChild(h);
+    }
+
+    $(mod.col === 'a' ? 'rack-a' : 'rack-b').appendChild(box);
+  });
+
+  function setAll(vals){
+    Object.keys(vals).forEach(function(k){
+      P[k] = vals[k];
+      var r = refs[k];
+      if (r){
+        var raw = vals[k] * (r.it.sc || 1);
+        r.sl.value = String(raw);
+        r.nb.value = raw.toFixed(r.it.dec);
+      }
+      var sel = $('x-' + k);
+      if (sel){
+        var idx = [0,25,50,100].indexOf(vals[k]);
+        if (idx >= 0) sel.value = String(idx);
+      }
+      var tb = $('t-' + k);
+      if (tb){
+        tb.classList.toggle('on', !!vals[k]);
+        tb.setAttribute('aria-pressed', vals[k] ? 'true' : 'false');
+      }
+    });
+    live();
+  }
+
+  // ---------------------------------------------------------- presets
+  var PRESETS = [
+    ['Mihotanie', {length:24,floor:50,stuck:0,disorder:0.15,repeat:0.1,rate:1,
+      absence:0.5,envelope:1,mirage:0.45,lean:0.3,smoo:60,sync:0,freeze:0}],
+    ['Koktanie', {length:6,floor:0,stuck:0.1,disorder:0.5,repeat:0.6,rate:1,
+      absence:0.72,envelope:1,mirage:0.9,lean:0,smoo:4,sync:0,freeze:0}],
+    ['Zamrznutý dron', {length:40,floor:100,stuck:0.8,disorder:0,repeat:1,rate:0.75,
+      absence:0.5,envelope:1,mirage:1,lean:0,smoo:120,sync:1,freeze:1}],
+    ['Rozpad', {length:2,floor:0,stuck:0.35,disorder:0.85,repeat:0.2,rate:1.5,
+      absence:0.85,envelope:0,mirage:1,lean:0,smoo:0,sync:0,freeze:0}],
+    ['Duchovia', {length:14,floor:25,stuck:0.55,disorder:0.35,repeat:0,rate:1,
+      absence:0.35,envelope:1,mirage:0.3,lean:-0.4,smoo:30,sync:0,freeze:0}]
+  ];
+  PRESETS.forEach(function(pr){
+    var b = document.createElement('button');
+    b.textContent = pr[0];
+    b.addEventListener('click', function(){ setAll(pr[1]); });
+    $('presets').appendChild(b);
+  });
+
+  // ------------------------------------------------------------- audio
+  function ensureCtx(){
+    if (ctx) return Promise.resolve();
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    var code = $('workletSrc').textContent;
+    var url = URL.createObjectURL(new Blob([code], { type:'application/javascript' }));
+    return ctx.audioWorklet.addModule(url).then(function(){
+      URL.revokeObjectURL(url);
+      node = new AudioWorkletNode(ctx, 'fauve', {
+        numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[2]
+      });
+      node.port.onmessage = function(e){ draw(e.data); };
+      node.connect(ctx.destination);
+      live();
+    }).catch(function(err){
+      say('Audio worklet sa nenačítal. Spusti stránku cez lokálny server.', 'err');
+      throw err;
+    });
+  }
+
+  function clearSource(){
+    if (toneNodes){ toneNodes.forEach(function(o){ try{ o.stop(); }catch(e){} }); toneNodes = null; }
+    if (srcNode){ try{ srcNode.disconnect(); }catch(e){} 
+      if (srcNode.stop){ try{ srcNode.stop(); }catch(e){} } srcNode = null; }
+    if (micStream){ micStream.getTracks().forEach(function(t){ t.stop(); }); micStream = null; }
+    ['tone','mic','pick'].forEach(function(id){ $(id).classList.remove('on'); });
+  }
+  function mark(id){
+    ['tone','mic','pick'].forEach(function(x){ $(x).classList.toggle('on', x === id); });
+  }
+
+  $('stop').addEventListener('click', function(){ clearSource(); say('Ticho.'); });
+
+  $('tone').addEventListener('click', function(){
+    ensureCtx().then(function(){
+      if (ctx.state === 'suspended') ctx.resume();
+      clearSource();
+      var mix = ctx.createGain(); mix.gain.value = 0.32;
+      var made = [];
+      [[196,0.5],[293.66,0.34],[61.74,0.4]].forEach(function(sp){
+        var o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = sp[0];
+        var g = ctx.createGain(); g.gain.value = sp[1];
+        var lfo = ctx.createOscillator(); lfo.frequency.value = 0.13 + Math.random()*0.2;
+        var lg = ctx.createGain(); lg.gain.value = sp[1]*0.55;
+        lfo.connect(lg); lg.connect(g.gain);
+        o.connect(g); g.connect(mix);
+        o.start(); lfo.start();
+        made.push(o, lfo);
+      });
+      var lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600;
+      mix.connect(lp); lp.connect(node);
+      toneNodes = made; srcNode = mix;
+      mark('tone'); say('Testovací tón hrá.', 'ok');
+    }).catch(function(){});
+  });
+
+  $('mic').addEventListener('click', function(){
+    ensureCtx().then(function(){
+      return navigator.mediaDevices.getUserMedia({
+        audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+      });
+    }).then(function(stream){
+      if (ctx.state === 'suspended') ctx.resume();
+      clearSource();
+      micStream = stream;
+      srcNode = ctx.createMediaStreamSource(stream);
+      srcNode.connect(node);
+      mark('mic'); say('Mikrofón beží. Nasaď si slúchadlá.', 'ok');
+    }).catch(function(){ say('Mikrofón sa nepodarilo otvoriť.', 'err'); });
+  });
+
+  $('pick').addEventListener('click', function(){ $('file').click(); });
+
+  $('file').addEventListener('change', function(e){
+    var f = e.target.files && e.target.files[0];
+    if (!f) return;
+    say('Načítavam ' + f.name);
+    ensureCtx().then(function(){ return f.arrayBuffer(); })
+      .then(function(ab){ return ctx.decodeAudioData(ab); })
+      .then(function(buf){
+        if (ctx.state === 'suspended') ctx.resume();
+        clearSource();
+        var s = ctx.createBufferSource();
+        s.buffer = buf; s.loop = true; s.connect(node); s.start();
+        srcNode = s;
+        mark('pick'); say(f.name + ' hrá v slučke.', 'ok');
+      }).catch(function(){ say('Súbor sa nepodarilo dekódovať.', 'err'); });
+  });
+
+  // ------------------------------------------------------------ display
+  var cv = $('cv'), g2 = cv.getContext('2d'), mtrEl = $('mtr');
+  var dpr = Math.min(2, window.devicePixelRatio || 1);
+  var SPAN = 4;
+
+  function resize(){
+    var w = cv.clientWidth, h = cv.clientHeight;
+    cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+    g2.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener('resize', resize);
+
+  function draw(d){
+    var w = cv.clientWidth, h = cv.clientHeight;
+    if (cv.width !== Math.round(w*dpr) || cv.height !== Math.round(h*dpr)) resize();
+    var mid = h/2;
+    g2.clearRect(0,0,w,h);
+
+    // one grid line per second
+    g2.strokeStyle = 'rgba(29,38,53,.9)'; g2.lineWidth = 1;
+    for (var s = 1; s <= SPAN; s++){
+      var gx = Math.round(w - (s/SPAN)*w) + 0.5;
+      g2.beginPath(); g2.moveTo(gx,0); g2.lineTo(gx,h); g2.stroke();
+    }
+    g2.strokeStyle = 'rgba(29,38,53,.75)';
+    g2.beginPath(); g2.moveTo(0, mid+0.5); g2.lineTo(w, mid+0.5); g2.stroke();
+
+    // window currently being read
+    if (d.readAge >= 0 && d.readAge < SPAN){
+      var x1 = w - (d.readAge/SPAN)*w;
+      var x2 = x1 + (d.spanSec/SPAN)*w;
+      g2.fillStyle = 'rgba(92,157,255,.13)';
+      g2.fillRect(x1, 0, Math.max(2, x2-x1), h);
+      g2.strokeStyle = '#5C9DFF'; g2.lineWidth = 1;
+      g2.beginPath(); g2.moveTo(Math.round(x1)+0.5, 0); g2.lineTo(Math.round(x1)+0.5, h); g2.stroke();
+    }
+
+    // amplitude trace, newest at the right edge
+    var tr = d.trace, len = tr.length, head = d.head;
+    g2.strokeStyle = 'rgba(221,228,239,.72)'; g2.lineWidth = 1;
+    g2.beginPath();
+    for (var i = 0; i < len; i++){
+      var v = tr[(head - len + i + len*2) % len];
+      var x = (i/(len-1))*w;
+      var a = Math.min(1, v*2.6) * (mid - 7);
+      g2.moveTo(x, mid-a); g2.lineTo(x, mid+a);
+    }
+    g2.stroke();
+
+    // collection boundaries
+    g2.strokeStyle = '#33445C'; g2.lineWidth = 1;
+    for (var m = 0; m < d.marks.length; m++){
+      var mx = Math.round(w - (d.marks[m]/SPAN)*w) + 0.5;
+      g2.beginPath(); g2.moveTo(mx, 0); g2.lineTo(mx, 10); g2.stroke();
+      g2.beginPath(); g2.moveTo(mx, h-10); g2.lineTo(mx, h); g2.stroke();
+    }
+
+    // write head
+    g2.strokeStyle = '#FF6A46'; g2.lineWidth = 2;
+    g2.beginPath(); g2.moveTo(w-1, 0); g2.lineTo(w-1, h); g2.stroke();
+
+    // seconds scale
+    g2.fillStyle = 'rgba(119,135,158,.75)';
+    g2.font = '400 10px "IBM Plex Mono",monospace';
+    g2.textAlign = 'left';
+    for (var t2 = 1; t2 < SPAN; t2++){
+      g2.fillText('-' + t2 + 's', Math.round(w - (t2/SPAN)*w) + 4, h - 5);
+    }
+
+    mtrEl.style.width = Math.min(100, (d.level||0)*260).toFixed(1) + '%';
+    $('stats').textContent = d.ncol + ' kolekcií / ' +
+      (d.curMs ? d.curMs.toFixed(0) : '0') + ' ms';
+  }
+
+  resize();
+  draw({ trace:new Float32Array(1600), head:0, marks:[], readAge:-1,
+         spanSec:0, ncol:0, curMs:0, level:0 });
+})();
+</script>
+</body>
+</html>
