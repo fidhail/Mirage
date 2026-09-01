@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Waveset Collection Engine</title>
+<title>Waveset collection engine</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@700;900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -160,7 +160,7 @@
 
 <div class="wrap">
   <header>
-    <h1>Waveset <em>Collection Engine</em></h1>
+    <h1>Waveset <em>collection engine</em></h1>
     <div class="stamp">Zero-crossing slicer / 32 collections / 10 s buffer</div>
   </header>
 
@@ -408,7 +408,7 @@ registerProcessor('fauve', FauveProcessor);
     sync:0, dryGain:1, wetGain:1, sustain:1
   };
 
-  var ctx = null, node = null, srcNode = null, micStream = null, toneNodes = null;
+  var ctx = null, ctxReady = null, node = null, srcNode = null, micStream = null, toneNodes = null;
 
   function say(msg, cls){
     var el = $('status');
@@ -583,12 +583,31 @@ registerProcessor('fauve', FauveProcessor);
   });
 
   // ------------------------------------------------------------- audio
+  // The AudioContext must be created and resumed inside the user gesture itself.
+  // Waiting for a permission prompt or a decode first lets the activation expire,
+  // which leaves the context suspended and the whole graph silent.
+  function unlock(){
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state !== 'running') ctx.resume().catch(function(){});
+  }
+
+  function describe(err){
+    if (!window.isSecureContext) return 'page is not a secure context, use http://localhost or https';
+    if (!err) return 'unknown error';
+    if (err.name === 'NotAllowedError') return 'permission denied by the browser';
+    if (err.name === 'NotFoundError')   return 'no input device found';
+    if (err.name === 'EncodingError')   return 'codec not supported by this browser';
+    return (err.name || 'Error') + (err.message ? ': ' + err.message : '');
+  }
+
+  // Cache the promise, not just the context: a second click while addModule is
+  // still in flight would otherwise get a null node and fail to connect.
   function ensureCtx(){
-    if (ctx) return Promise.resolve();
-    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctxReady) return ctxReady;
+    unlock();
     var code = $('workletSrc').textContent;
     var url = URL.createObjectURL(new Blob([code], { type:'application/javascript' }));
-    return ctx.audioWorklet.addModule(url).then(function(){
+    ctxReady = ctx.audioWorklet.addModule(url).then(function(){
       URL.revokeObjectURL(url);
       node = new AudioWorkletNode(ctx, 'fauve', {
         numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[2]
@@ -597,14 +616,16 @@ registerProcessor('fauve', FauveProcessor);
       node.connect(ctx.destination);
       live();
     }).catch(function(err){
-      say('Audio worklet failed to load. Serve the page over a local server.', 'err');
+      ctxReady = null;
+      say('Audio worklet failed to load (' + describe(err) + '). Serve over http, not file://.', 'err');
       throw err;
     });
+    return ctxReady;
   }
 
   function clearSource(){
     if (toneNodes){ toneNodes.forEach(function(o){ try{ o.stop(); }catch(e){} }); toneNodes = null; }
-    if (srcNode){ try{ srcNode.disconnect(); }catch(e){} 
+    if (srcNode){ try{ srcNode.disconnect(); }catch(e){}
       if (srcNode.stop){ try{ srcNode.stop(); }catch(e){} } srcNode = null; }
     if (micStream){ micStream.getTracks().forEach(function(t){ t.stop(); }); micStream = null; }
     ['tone','mic','pick'].forEach(function(id){ $(id).classList.remove('on'); });
@@ -613,11 +634,16 @@ registerProcessor('fauve', FauveProcessor);
     ['tone','mic','pick'].forEach(function(x){ $(x).classList.toggle('on', x === id); });
   }
 
+  // Late fallback: any click re-arms a context the browser suspended behind our back.
+  document.addEventListener('click', function(){
+    if (ctx && ctx.state !== 'running') ctx.resume().catch(function(){});
+  });
+
   $('stop').addEventListener('click', function(){ clearSource(); say('Stopped.'); });
 
   $('tone').addEventListener('click', function(){
+    unlock();
     ensureCtx().then(function(){
-      if (ctx.state === 'suspended') ctx.resume();
       clearSource();
       var mix = ctx.createGain(); mix.gain.value = 0.32;
       var made = [];
@@ -634,41 +660,61 @@ registerProcessor('fauve', FauveProcessor);
       var lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600;
       mix.connect(lp); lp.connect(node);
       toneNodes = made; srcNode = mix;
+      if (ctx.state !== 'running') ctx.resume().catch(function(){});
       mark('tone'); say('Test tone running.', 'ok');
-    }).catch(function(){});
+    }).catch(function(err){ say('Test tone failed: ' + describe(err), 'err'); });
   });
 
   $('mic').addEventListener('click', function(){
+    unlock();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      say('Microphone unavailable: ' + describe(null), 'err');
+      return;
+    }
     ensureCtx().then(function(){
       return navigator.mediaDevices.getUserMedia({
         audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
       });
     }).then(function(stream){
-      if (ctx.state === 'suspended') ctx.resume();
       clearSource();
       micStream = stream;
       srcNode = ctx.createMediaStreamSource(stream);
       srcNode.connect(node);
-      mark('mic'); say('Mic input live. Use headphones.', 'ok');
-    }).catch(function(){ say('Could not open the microphone.', 'err'); });
+      if (ctx.state !== 'running') ctx.resume().catch(function(){});
+      mark('mic');
+      var tr = stream.getAudioTracks()[0];
+      say('Mic live: ' + (tr ? tr.label || 'default input' : 'input') + '. Use headphones.', 'ok');
+    }).catch(function(err){ say('Microphone unavailable: ' + describe(err), 'err'); });
   });
 
-  $('pick').addEventListener('click', function(){ $('file').click(); });
+  $('pick').addEventListener('click', function(){ unlock(); $('file').click(); });
 
   $('file').addEventListener('change', function(e){
     var f = e.target.files && e.target.files[0];
+    e.target.value = '';                 // so picking the same file again still fires
     if (!f) return;
+    unlock();
     say('Decoding ' + f.name);
-    ensureCtx().then(function(){ return f.arrayBuffer(); })
-      .then(function(ab){ return ctx.decodeAudioData(ab); })
+    ensureCtx()
+      .then(function(){ return f.arrayBuffer(); })
+      .then(function(ab){
+        // Safari still only implements the callback form of decodeAudioData.
+        return new Promise(function(res, rej){
+          var ret = ctx.decodeAudioData(ab, res, rej);
+          if (ret && ret.then) ret.then(res, rej);
+        });
+      })
       .then(function(buf){
-        if (ctx.state === 'suspended') ctx.resume();
         clearSource();
         var s = ctx.createBufferSource();
         s.buffer = buf; s.loop = true; s.connect(node); s.start();
         srcNode = s;
-        mark('pick'); say(f.name + ' looping.', 'ok');
-      }).catch(function(){ say('Could not decode that file.', 'err'); });
+        if (ctx.state !== 'running') ctx.resume().catch(function(){});
+        mark('pick');
+        say(f.name + ' looping: ' + buf.duration.toFixed(1) + ' s, ' +
+            buf.numberOfChannels + ' ch, ' + buf.sampleRate + ' Hz', 'ok');
+      })
+      .catch(function(err){ say('Could not play ' + f.name + ' (' + describe(err) + ')', 'err'); });
   });
 
   // ------------------------------------------------------------ display
@@ -741,8 +787,8 @@ registerProcessor('fauve', FauveProcessor);
     }
 
     mtrEl.style.width = Math.min(100, (d.level||0)*260).toFixed(1) + '%';
-    $('stats').textContent = d.ncol + ' collections / ' +
-      (d.curMs ? d.curMs.toFixed(0) : '0') + ' ms';
+    $('stats').textContent = (ctx && ctx.state !== 'running' ? ctx.state + ' \u00b7 ' : '') +
+      d.ncol + ' collections / ' + (d.curMs ? d.curMs.toFixed(0) : '0') + ' ms';
   }
 
   resize();
