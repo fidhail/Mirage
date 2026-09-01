@@ -160,7 +160,7 @@
 
 <div class="wrap">
   <header>
-    <h1>Waveset <em>Collection engine</em></h1>
+    <h1>Waveset <em>Collection Engine</em></h1>
     <div class="stamp">Zero-crossing slicer / 32 collections / 10 s buffer</div>
   </header>
 
@@ -209,7 +209,7 @@
 </div>
 
 <script type="text/worklet" id="workletSrc">
-class FauveProcessor extends AudioWorkletProcessor {
+class FxProcessor extends AudioWorkletProcessor {
   constructor(){
     super();
     this.sr = sampleRate;
@@ -226,14 +226,21 @@ class FauveProcessor extends AudioWorkletProcessor {
     this.armed = false;
     this.wsCount = 0; this.colSamples = 0;
 
-    this.cIdx = -1;
-    this.playLeft = 0; this.playLen = 1; this.playPos = 0; this.readCur = 0;
+    // The read head runs forward continuously and only jumps when a parameter
+    // asks it to. Re-triggering a collection every segment turns the output into
+    // a short loop, which is heard as a buzz rather than as the source material.
+    this.readCur = -1;      // absolute, fractional
+    this.segStart = 0;      // where the current segment began, for Repeat
+    this.segLeft = 0; this.segLen = 1; this.playPos = 0;
+    this.xfLeft = 0; this.xfLen = 1; this.xfCur = 0;  // declick ramp across a jump
+    this.lastDur = Math.round(0.05 * this.sr);
     this.absAmp = 1;
     this.gL = 0; this.gR = 0; this.tL = 0; this.tR = 0;
     this.envF = 0; this.sGate = 1;
+    this.dcxL = 0; this.dcyL = 0; this.dcxR = 0; this.dcyR = 0;
 
-    this.p = { length:10, floor:0, stuck:0, disorder:0, repeat:0, freeze:0,
-               rate:1, absence:0.5, envelope:1, mirage:0.6, lean:0, smoo:20,
+    this.p = { length:20, floor:50, stuck:0, disorder:0, repeat:0, freeze:0,
+               rate:1, absence:0.5, envelope:0, mirage:0.35, lean:0, smoo:40,
                sync:0, dryGain:1, wetGain:1, sustain:1 };
 
     // downsampled trace for the display: 400 points per second, 4 seconds
@@ -251,19 +258,58 @@ class FauveProcessor extends AudioWorkletProcessor {
     };
   }
 
-  nextCollection(){
+  nextSegment(){
     const p = this.p;
-    const reuse = (Math.random() < p.repeat) || p.freeze;
-    if (!reuse || this.cIdx < 0){
-      const k = (Math.random() < p.disorder) ? Math.floor(Math.random() * this.ncol) : 0;
-      this.cIdx = (((this.wp - 1 - k) % this.HIST) + this.HIST) % this.HIST;
+    const H = this.HIST;
+    const newest = (((this.wp - 1) % H) + H) % H;
+    const prev = this.readCur;
+    let jumped = false;
+
+    if (p.freeze || Math.random() < p.repeat){
+      this.readCur = this.segStart;          // replay the segment just heard
+      jumped = true;
+    } else if (this.ncol > 1 && Math.random() < p.disorder){
+      const k = Math.floor(Math.random() * this.ncol);
+      const idx = (((this.wp - 1 - k) % H) + H) % H;
+      if (this.colDur[idx] >= 1){
+        this.readCur = this.colStart[idx];
+        this.lastDur = this.colDur[idx];
+        jumped = true;
+      }
     }
-    const dur = this.colDur[this.cIdx];
-    if (dur < 1){ this.playLeft = 0; return; }
-    this.readCur = this.colStart[this.cIdx];
-    this.playLen = Math.max(1, Math.round(dur / p.rate));
-    this.playLeft = this.playLen;
+    // otherwise the head simply carries on, so the source stays intact
+
+    // re-anchor if the head left the buffer or caught up with the writer
+    let age = this.total - this.readCur;
+    if (this.readCur < 0 || age < 512 || age > this.bufLen - 1024){
+      this.readCur = this.colStart[newest];
+      this.lastDur = this.colDur[newest] || this.lastDur;
+      age = this.total - this.readCur;
+      jumped = true;
+    }
+
+    this.segStart = this.readCur;
+    this.segLen = Math.max(1, Math.round(this.lastDur / p.rate));
+
+    // At rates above 1 the head closes on the writer by (rate-1) per sample.
+    // End the segment before it can overtake instead of reading unwritten audio.
+    if (p.rate > 1){
+      const room = Math.floor((age - 512) / (p.rate - 1));
+      if (room < this.segLen) this.segLen = Math.max(1, room);
+    }
+
+    this.segLeft = this.segLen;
     this.playPos = 0;
+
+    // A jump lands mid-waveform whenever rate warps the alignment, so ramp
+    // across it. Cheaper and far less intrusive than windowing whole segments.
+    if (jumped && prev >= 0){
+      this.xfCur = prev;
+      this.xfLen = Math.min(Math.round(0.002 * this.sr), Math.max(1, this.segLen >> 1));
+      this.xfLeft = this.xfLen;
+    } else {
+      this.xfLeft = 0;
+    }
 
     const a = p.absence, rnd = Math.random();
     this.absAmp = (a < 0.5) ? (1 - (1 - 2*a) * rnd)
@@ -292,11 +338,16 @@ class FauveProcessor extends AudioWorkletProcessor {
       const l = inL ? inL[i] : 0;
       const r = inR ? inR[i] : 0;
 
-      const wi = this.total % this.bufLen;
-      this.bufL[wi] = l;
-      this.bufR[wi] = r;
+      // DC offset would bias the zero crossings and misalign every cut,
+      // so the recorded and analysed copy is high-passed. The dry path is not.
+      const hl = l - this.dcxL + 0.9995 * this.dcyL; this.dcxL = l; this.dcyL = hl;
+      const hr = r - this.dcxR + 0.9995 * this.dcyR; this.dcxR = r; this.dcyR = hr;
 
-      const mono = (l + r) * 0.5;
+      const wi = this.total % this.bufLen;
+      this.bufL[wi] = hl;
+      this.bufR[wi] = hr;
+
+      const mono = (hl + hr) * 0.5;
       const mag = mono < 0 ? -mono : mono;
       this.envF += (mag - this.envF) * (mag > this.envF ? 0.02 : 0.0004);
 
@@ -322,6 +373,7 @@ class FauveProcessor extends AudioWorkletProcessor {
           this.colStart[this.wp] = this.total - this.colSamples + 1;
           this.colDur[this.wp]   = this.colSamples;
           this.vMarks[this.wp]   = this.total;
+          this.lastDur           = this.colSamples;
           this.wp = (this.wp + 1) % this.HIST;
           if (this.ncol < this.HIST) this.ncol++;
         }
@@ -329,32 +381,42 @@ class FauveProcessor extends AudioWorkletProcessor {
         this.colSamples = 0;
       }
 
-      if (this.playLeft <= 0 && this.ncol > 0) this.nextCollection();
+      if (this.segLeft <= 0 && this.ncol > 0) this.nextSegment();
 
       let pl = 0, pr = 0;
-      if (this.playLeft > 0){
-        const age = this.total - this.readCur;
-        if (age > this.bufLen - 512 || age < 1){
-          this.playLeft = 0;
-        } else {
-          const idx  = Math.floor(this.readCur);
-          const frac = this.readCur - idx;
-          const i0 = ((idx % this.bufLen) + this.bufLen) % this.bufLen;
-          const i1 = (i0 + 1) % this.bufLen;
-          pl = this.bufL[i0] * (1 - frac) + this.bufL[i1] * frac;
-          pr = this.bufR[i0] * (1 - frac) + this.bufR[i1] * frac;
+      if (this.segLeft > 0){
+        const L = this.bufLen;
+        const idx  = Math.floor(this.readCur);
+        const frac = this.readCur - idx;
+        const i0 = ((idx % L) + L) % L;
+        const i1 = (i0 + 1) % L;
+        pl = this.bufL[i0] * (1 - frac) + this.bufL[i1] * frac;
+        pr = this.bufR[i0] * (1 - frac) + this.bufR[i1] * frac;
 
-          let e = 1;
-          if (p.envelope){
-            e = 0.5 - 0.5 * Math.cos(2 * Math.PI * (this.playPos / this.playLen));
-          }
-          const g = e * this.absAmp;
-          pl *= g; pr *= g;
-
-          this.readCur += p.rate;
-          this.playPos++;
-          this.playLeft--;
+        if (this.xfLeft > 0){                    // ramp out of the previous position
+          const j   = Math.floor(this.xfCur);
+          const fr2 = this.xfCur - j;
+          const j0 = ((j % L) + L) % L;
+          const j1 = (j0 + 1) % L;
+          const ol = this.bufL[j0] * (1 - fr2) + this.bufL[j1] * fr2;
+          const or_ = this.bufR[j0] * (1 - fr2) + this.bufR[j1] * fr2;
+          const w = this.xfLeft / this.xfLen;    // 1 at the seam, 0 when settled
+          pl = pl * (1 - w) + ol * w;
+          pr = pr * (1 - w) + or_ * w;
+          this.xfCur += p.rate;
+          this.xfLeft--;
         }
+
+        let e = 1;
+        if (p.envelope){
+          e = 0.5 - 0.5 * Math.cos(2 * Math.PI * (this.playPos / this.segLen));
+        }
+        const g = e * this.absAmp;
+        pl *= g; pr *= g;
+
+        this.readCur += p.rate;
+        this.playPos++;
+        this.segLeft--;
       }
 
       const wantGate = p.sustain ? 1 : (this.envF > 0.0009 ? 1 : 0);
@@ -384,17 +446,17 @@ class FauveProcessor extends AudioWorkletProcessor {
         trace: this.vBuf.slice(0),
         head: this.vIdx,
         marks: marks,
-        readAge: this.playLeft > 0 ? (this.total - this.readCur) / this.sr : -1,
-        spanSec: this.playLeft > 0 ? (this.playLen * this.p.rate) / this.sr : 0,
+        readAge: this.segLeft > 0 ? (this.total - this.readCur) / this.sr : -1,
+        spanSec: this.segLeft > 0 ? (this.segLen * this.p.rate) / this.sr : 0,
         ncol: this.ncol,
         level: this.envF,
-        curMs: this.playLen > 0 ? (this.playLen * this.p.rate * 1000 / this.sr) : 0
+        curMs: this.segLen > 0 ? (this.segLen * this.p.rate * 1000 / this.sr) : 0
       });
     }
     return true;
   }
 }
-registerProcessor('fauve', FauveProcessor);
+registerProcessor('Fx', FxProcessor);
 </script>
 
 <script>
@@ -403,8 +465,8 @@ registerProcessor('fauve', FauveProcessor);
   var $ = function(id){ return document.getElementById(id); };
 
   var P = {
-    length:10, floor:0, stuck:0, disorder:0, repeat:0, freeze:0,
-    rate:1, absence:0.5, envelope:1, mirage:0.6, lean:0, smoo:20,
+    length:20, floor:50, stuck:0, disorder:0, repeat:0, freeze:0,
+    rate:1, absence:0.5, envelope:0, mirage:0.35, lean:0, smoo:40,
     sync:0, dryGain:1, wetGain:1, sustain:1
   };
 
@@ -431,7 +493,7 @@ registerProcessor('fauve', FauveProcessor);
       { k:'rate',     n:'Rate',        min:0.5, max:2, step:0.01, u:'×', dec:2 },
       { k:'absence',  n:'Absence',     min:0, max:100, step:1,  u:'%',   dec:0, sc:100 }
     ], toggles:[['freeze','Freeze'],['envelope','Envelope']],
-       hint:'Absence below 50 randomises gain per collection, above 50 drops it to silence.' },
+       hint:'Absence below 50 randomises gain per segment, above 50 drops it to silence. Envelope windows every segment for a granular character.' },
 
     { t:'Mirage', col:'b', items:[
       { k:'mirage', n:'Mirage',     min:0, max:100, step:1, u:'%',  dec:0, sc:100 },
@@ -564,16 +626,16 @@ registerProcessor('fauve', FauveProcessor);
 
   // ---------------------------------------------------------- presets
   var PRESETS = [
-    ['Shimmer', {length:24,floor:50,stuck:0,disorder:0.15,repeat:0.1,rate:1,
-      absence:0.5,envelope:1,mirage:0.45,lean:0.3,smoo:60,sync:0,freeze:0}],
-    ['Stutter', {length:6,floor:0,stuck:0.1,disorder:0.5,repeat:0.6,rate:1,
-      absence:0.72,envelope:1,mirage:0.9,lean:0,smoo:4,sync:0,freeze:0}],
+    ['Shimmer', {length:24,floor:50,stuck:0,disorder:0.18,repeat:0.1,rate:1,
+      absence:0.5,envelope:0,mirage:0.4,lean:0.3,smoo:70,sync:0,freeze:0}],
+    ['Stutter', {length:10,floor:25,stuck:0.1,disorder:0.5,repeat:0.6,rate:1,
+      absence:0.66,envelope:0,mirage:0.85,lean:0,smoo:6,sync:0,freeze:0}],
     ['Frozen drone', {length:40,floor:100,stuck:0.8,disorder:0,repeat:1,rate:0.75,
       absence:0.5,envelope:1,mirage:1,lean:0,smoo:120,sync:1,freeze:1}],
     ['Disintegrate', {length:2,floor:0,stuck:0.35,disorder:0.85,repeat:0.2,rate:1.5,
       absence:0.85,envelope:0,mirage:1,lean:0,smoo:0,sync:0,freeze:0}],
-    ['Ghost notes', {length:14,floor:25,stuck:0.55,disorder:0.35,repeat:0,rate:1,
-      absence:0.35,envelope:1,mirage:0.3,lean:-0.4,smoo:30,sync:0,freeze:0}]
+    ['Ghost notes', {length:20,floor:50,stuck:0.55,disorder:0.35,repeat:0,rate:1,
+      absence:0.35,envelope:0,mirage:0.3,lean:-0.4,smoo:45,sync:0,freeze:0}]
   ];
   PRESETS.forEach(function(pr){
     var b = document.createElement('button');
@@ -623,7 +685,7 @@ registerProcessor('fauve', FauveProcessor);
     var url = URL.createObjectURL(new Blob([code], { type:'application/javascript' }));
     ctxReady = ctx.audioWorklet.addModule(url).then(function(){
       URL.revokeObjectURL(url);
-      node = new AudioWorkletNode(ctx, 'fauve', {
+      node = new AudioWorkletNode(ctx, 'Fx', {
         numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[2]
       });
       node.port.onmessage = function(e){ draw(e.data); };
@@ -721,7 +783,7 @@ registerProcessor('fauve', FauveProcessor);
     }, 12000);
     function finish(msg, cls){ done = true; clearTimeout(watchdog); say(msg, cls); }
     function fail(err){
-      console.error('[fauve] file load failed while ' + stage, err);
+      console.error('[Fx] file load failed while ' + stage, err);
       finish('Failed while ' + stage + ' (' + describe(err) + ')', 'err');
     }
 
