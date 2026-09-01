@@ -160,7 +160,7 @@
 
 <div class="wrap">
   <header>
-    <h1>Waveset <em>collection engine</em></h1>
+    <h1>Waveset <em>Collection engine</em></h1>
     <div class="stamp">Zero-crossing slicer / 32 collections / 10 s buffer</div>
   </header>
 
@@ -592,19 +592,33 @@ registerProcessor('fauve', FauveProcessor);
   }
 
   function describe(err){
+    if (err && err.name === 'NotAllowedError') return 'permission denied by the browser';
+    if (err && err.name === 'NotFoundError')   return 'no input device found';
+    if (err && err.name === 'EncodingError')   return 'codec not supported by this browser';
+    if (err && (err.name || err.message))
+      return (err.name || 'Error') + (err.message ? ': ' + err.message : '');
     if (!window.isSecureContext) return 'page is not a secure context, use http://localhost or https';
-    if (!err) return 'unknown error';
-    if (err.name === 'NotAllowedError') return 'permission denied by the browser';
-    if (err.name === 'NotFoundError')   return 'no input device found';
-    if (err.name === 'EncodingError')   return 'codec not supported by this browser';
-    return (err.name || 'Error') + (err.message ? ': ' + err.message : '');
+    return 'unknown error';
+  }
+
+  // Safari and older Firefox lack File.arrayBuffer().
+  function readFile(f){
+    if (f.arrayBuffer) return f.arrayBuffer();
+    return new Promise(function(res, rej){
+      var fr = new FileReader();
+      fr.onload = function(){ res(fr.result); };
+      fr.onerror = function(){ rej(fr.error || new Error('FileReader failed')); };
+      fr.readAsArrayBuffer(f);
+    });
   }
 
   // Cache the promise, not just the context: a second click while addModule is
   // still in flight would otherwise get a null node and fail to connect.
   function ensureCtx(){
     if (ctxReady) return ctxReady;
-    unlock();
+    try { unlock(); } catch(e){ return Promise.reject(e); }
+    if (!ctx) return Promise.reject(new Error('Web Audio is not available in this browser'));
+    if (!ctx.audioWorklet) return Promise.reject(new Error('AudioWorklet is not supported in this browser'));
     var code = $('workletSrc').textContent;
     var url = URL.createObjectURL(new Blob([code], { type:'application/javascript' }));
     ctxReady = ctx.audioWorklet.addModule(url).then(function(){
@@ -667,8 +681,12 @@ registerProcessor('fauve', FauveProcessor);
 
   $('mic').addEventListener('click', function(){
     unlock();
+    if (!window.isSecureContext){
+      say('Microphone needs a secure context: open the page via http://localhost or https.', 'err');
+      return;
+    }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      say('Microphone unavailable: ' + describe(null), 'err');
+      say('Microphone unavailable: getUserMedia is missing in this browser.', 'err');
       return;
     }
     ensureCtx().then(function(){
@@ -694,27 +712,49 @@ registerProcessor('fauve', FauveProcessor);
     e.target.value = '';                 // so picking the same file again still fires
     if (!f) return;
     unlock();
+
+    // The chain below can stall rather than fail, so track where we are and
+    // report it instead of leaving the status stuck on "Decoding".
+    var stage = 'starting', done = false;
+    var watchdog = setTimeout(function(){
+      if (!done) say('Stalled while ' + stage + '. See the browser console for details.', 'err');
+    }, 12000);
+    function finish(msg, cls){ done = true; clearTimeout(watchdog); say(msg, cls); }
+    function fail(err){
+      console.error('[fauve] file load failed while ' + stage, err);
+      finish('Failed while ' + stage + ' (' + describe(err) + ')', 'err');
+    }
+
     say('Decoding ' + f.name);
-    ensureCtx()
-      .then(function(){ return f.arrayBuffer(); })
-      .then(function(ab){
-        // Safari still only implements the callback form of decodeAudioData.
-        return new Promise(function(res, rej){
-          var ret = ctx.decodeAudioData(ab, res, rej);
-          if (ret && ret.then) ret.then(res, rej);
-        });
-      })
-      .then(function(buf){
-        clearSource();
-        var s = ctx.createBufferSource();
-        s.buffer = buf; s.loop = true; s.connect(node); s.start();
-        srcNode = s;
-        if (ctx.state !== 'running') ctx.resume().catch(function(){});
-        mark('pick');
-        say(f.name + ' looping: ' + buf.duration.toFixed(1) + ' s, ' +
-            buf.numberOfChannels + ' ch, ' + buf.sampleRate + ' Hz', 'ok');
-      })
-      .catch(function(err){ say('Could not play ' + f.name + ' (' + describe(err) + ')', 'err'); });
+    try {
+      stage = 'starting the audio engine';
+      ensureCtx()
+        .then(function(){
+          stage = 'reading the file';
+          return readFile(f);
+        })
+        .then(function(ab){
+          stage = 'decoding ' + (ab.byteLength / 1048576).toFixed(1) + ' MB';
+          return new Promise(function(res, rej){
+            // Safari only implements the callback form; Chrome returns a promise too.
+            var ret = ctx.decodeAudioData(ab, res, rej);
+            if (ret && ret.then) ret.then(res, rej);
+          });
+        })
+        .then(function(buf){
+          stage = 'connecting the graph';
+          if (!node) throw new Error('worklet node was never created');
+          clearSource();
+          var s2 = ctx.createBufferSource();
+          s2.buffer = buf; s2.loop = true; s2.connect(node); s2.start();
+          srcNode = s2;
+          if (ctx.state !== 'running') ctx.resume().catch(function(){});
+          mark('pick');
+          finish(f.name + ' looping: ' + buf.duration.toFixed(1) + ' s, ' +
+                 buf.numberOfChannels + ' ch, ' + buf.sampleRate + ' Hz', 'ok');
+        })
+        .catch(fail);
+    } catch (err){ fail(err); }
   });
 
   // ------------------------------------------------------------ display
